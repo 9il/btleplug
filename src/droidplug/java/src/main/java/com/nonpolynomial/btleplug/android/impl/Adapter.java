@@ -12,7 +12,6 @@ import android.os.Build;
 import android.os.ParcelUuid;
 
 import java.util.ArrayList;
-import java.util.List;
 
 @SuppressWarnings("unused") // Native code uses this class.
 class Adapter {
@@ -36,17 +35,31 @@ class Adapter {
                 filters.add(new Builder().setServiceUuid(ParcelUuid.fromString(uuid)).build());
             }
         }
-        ScanSettings settings;
-        if (Build.VERSION.SDK_INT >= 26) {
-            settings = new ScanSettings.Builder()
-                    .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
-                    .setLegacy(false)
-                    .build();
-        } else {
-            settings = new ScanSettings.Builder()
-                    .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
-                    .build();
+        // Rust ScanMode ordinal: 0=Balanced, 1=LowLatency, 2=LowPower, 3=Opportunistic.
+        int androidMode;
+        switch (filter.getScanMode()) {
+            case 1:
+                androidMode = ScanSettings.SCAN_MODE_LOW_LATENCY;
+                break;
+            case 2:
+                androidMode = ScanSettings.SCAN_MODE_LOW_POWER;
+                break;
+            case 3:
+                androidMode = ScanSettings.SCAN_MODE_OPPORTUNISTIC;
+                break;
+            case 0:
+            default:
+                androidMode = ScanSettings.SCAN_MODE_BALANCED;
+                break;
         }
+        ScanSettings.Builder settingsBuilder = new ScanSettings.Builder()
+                .setScanMode(androidMode)
+                .setReportDelay(0L)
+                .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES);
+        if (Build.VERSION.SDK_INT >= 26) {
+            settingsBuilder.setLegacy(false);
+        }
+        ScanSettings settings = settingsBuilder.build();
         BluetoothLeScanner scanner = bluetoothAdapter.getBluetoothLeScanner();
         if (scanner == null) {
           throw new NoBluetoothAdapterException();
