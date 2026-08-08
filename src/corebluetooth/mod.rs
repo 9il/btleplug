@@ -12,4 +12,4 @@ mod future;
 mod internal;
 pub mod manager;
 pub mod peripheral;
-mod utils;
+pub(crate) mod utils;

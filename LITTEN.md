@@ -31,6 +31,13 @@ Vendored from [btleplug 0.12.0](https://crates.io/crates/btleplug/0.12.0)
 7. **Android: `platform::init_from_raw`** — hosts on `jni` 0.21+ can init droidplug
    without sharing the 0.19 `JNIEnv` type (pass raw `JNIEnv*`).
 
+8. **`api::ATT_HEADER_BYTES`** — public ATT header size (3); used by effective MTU
+   math (`payload + ATT_HEADER_BYTES`).
+
+9. **`btleplug::apple_util`** — public re-export of `cbuuid_to_uuid` /
+   `uuid_to_cbuuid` / `nsuuid_to_uuid` for host apps (e.g. Litten peripheral)
+   without exposing the rest of `corebluetooth`.
+
 Phone apps do **not** HW-filter by exact name `"YdS"` (hub firmware still does).
 
 Wired via `[patch.crates-io]` in `crates/Cargo.toml` and `slint-ui/Cargo.toml`.

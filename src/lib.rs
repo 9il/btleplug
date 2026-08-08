@@ -90,6 +90,8 @@ use std::result;
 use std::time::Duration;
 
 pub mod api;
+#[cfg(target_vendor = "apple")]
+pub mod apple_util;
 #[cfg(target_os = "linux")]
 mod bluez;
 #[cfg(not(target_os = "linux"))]

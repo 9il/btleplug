@@ -1220,8 +1220,10 @@ impl CoreBluetoothInternal {
                     CBCharacteristicWriteType::CBCharacteristicWriteWithoutResponse,
                 )
             };
-            // ATT header is 3 bytes; write_len is the max value payload.
-            let att_mtu = (write_len as u32).saturating_add(3).min(u16::MAX as u32) as u16;
+            // ATT header is ATT_HEADER_BYTES; write_len is the max value payload.
+            let att_mtu = (write_len as u32)
+                .saturating_add(crate::api::ATT_HEADER_BYTES as u32)
+                .min(u16::MAX as u32) as u16;
             trace!(
                 "Effective ATT MTU for {}: write_len={} → mtu={}",
                 peripheral_uuid,
