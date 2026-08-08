@@ -16,6 +16,19 @@ pub fn init(env: &mut Env) -> crate::Result<()> {
     Ok(())
 }
 
+/// Initialize from a raw `JNIEnv*` (for hosts using a different `jni` crate version).
+///
+/// # Safety
+/// `env` must be a valid JNI environment pointer for the current thread.
+pub unsafe fn init_from_raw(env: *mut ::jni::sys::JNIEnv) -> crate::Result<()> {
+    let mut unowned = ::jni::EnvUnowned::from_raw(env);
+    match unowned.with_env(init).into_outcome() {
+        ::jni::Outcome::Ok(result) => result,
+        ::jni::Outcome::Err(err) => Err(err),
+        ::jni::Outcome::Panic(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
 pub fn global_adapter() -> &'static adapter::Adapter {
     GLOBAL_ADAPTER.get().expect(
         "Droidplug has not been initialized. Please initialize it with btleplug::platform::init().",

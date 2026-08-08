@@ -25,6 +25,12 @@ Vendored from [btleplug 0.12.0](https://crates.io/crates/btleplug/0.12.0)
 5. **Android: `TRANSPORT_LE`** — `connectGatt(..., TRANSPORT_LE)` on API ≥23 so
    dual-mode peers do not fall through to BR/EDR.
 
+6. **Android: `PeripheralId: FromStr` + `From<BDAddr>`** — reconnect / add by MAC
+   string without private constructors.
+
+7. **Android: `platform::init_from_raw`** — hosts on `jni` 0.21+ can init droidplug
+   without sharing the 0.19 `JNIEnv` type (pass raw `JNIEnv*`).
+
 Phone apps do **not** HW-filter by exact name `"YdS"` (hub firmware still does).
 
 Wired via `[patch.crates-io]` in `crates/Cargo.toml` and `slint-ui/Cargo.toml`.

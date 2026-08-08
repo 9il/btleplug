@@ -31,6 +31,7 @@ use std::{
     collections::BTreeSet,
     fmt::{self, Debug, Display, Formatter},
     pin::Pin,
+    str::FromStr,
     sync::atomic::{AtomicU16, Ordering},
     sync::{Arc, Mutex},
 };
@@ -41,6 +42,20 @@ pub struct PeripheralId(pub(super) BDAddr);
 impl Display for PeripheralId {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         Display::fmt(&self.0, f)
+    }
+}
+
+impl FromStr for PeripheralId {
+    type Err = crate::api::ParseBDAddrError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(PeripheralId(BDAddr::from_str(s)?))
+    }
+}
+
+impl From<BDAddr> for PeripheralId {
+    fn from(addr: BDAddr) -> Self {
+        PeripheralId(addr)
     }
 }
 
