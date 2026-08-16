@@ -56,8 +56,10 @@ class Adapter {
                 .setScanMode(androidMode)
                 .setReportDelay(0L)
                 .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES);
+        // setLegacy(true): legacy ADV only (Bluetooth 4.x). false = extended-only and
+        // hides YdS / typical tracker advertisements on API 26+.
         if (Build.VERSION.SDK_INT >= 26) {
-            settingsBuilder.setLegacy(false);
+            settingsBuilder.setLegacy(true);
         }
         ScanSettings settings = settingsBuilder.build();
         BluetoothLeScanner scanner = bluetoothAdapter.getBluetoothLeScanner();
