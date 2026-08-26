@@ -25,9 +25,9 @@ pub fn init(env: &mut Env) -> crate::Result<()> {
 /// # Safety
 /// `env` must be a valid JNI environment pointer for the current thread.
 pub unsafe fn init_from_raw(env: *mut std::ffi::c_void) -> crate::Result<()> {
-    let mut unowned = ::jni::EnvUnowned::from_raw(env.cast());
+    let mut unowned = unsafe { ::jni::EnvUnowned::from_raw(env.cast()) };
     match unowned.with_env(init).into_outcome() {
-        ::jni::Outcome::Ok(result) => result,
+        ::jni::Outcome::Ok(()) => Ok(()),
         ::jni::Outcome::Err(err) => Err(err),
         ::jni::Outcome::Panic(payload) => std::panic::resume_unwind(payload),
     }
