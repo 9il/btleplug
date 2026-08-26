@@ -16,23 +16,19 @@
 // This file may not be copied, modified, or distributed except
 // according to those terms.
 
-use super::utils::nsstring_to_string;
 use super::utils::{core_bluetooth::cbuuid_to_uuid, nsuuid_to_uuid};
 use futures::channel::mpsc::Sender;
 use futures::sink::SinkExt;
 use log::{error, trace};
+use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{ClassType, DeclaredClass, declare_class, msg_send_id, mutability, rc::Retained};
+use objc2::{define_class, msg_send, AnyThread, ClassType, DefinedClass, Message};
 use objc2_core_bluetooth::{
-    CBAdvertisementDataLocalNameKey, CBAdvertisementDataManufacturerDataKey,
-    CBAdvertisementDataServiceDataKey, CBAdvertisementDataServiceUUIDsKey,
-    CBAdvertisementDataTxPowerLevelKey, CBCentralManager, CBCentralManagerDelegate,
-    CBCharacteristic, CBDescriptor, CBManagerState, CBPeripheral, CBPeripheralDelegate, CBService,
-    CBUUID,
+    CBAdvertisementDataLocalNameKey, CBAdvertisementDataManufacturerDataKey, CBAdvertisementDataServiceDataKey,
+    CBAdvertisementDataServiceUUIDsKey, CBAdvertisementDataTxPowerLevelKey, CBCentralManager, CBCentralManagerDelegate, CBCharacteristic,
+    CBDescriptor, CBManagerState, CBPeripheral, CBPeripheralDelegate, CBService, CBUUID,
 };
-use objc2_foundation::{
-    NSArray, NSData, NSDictionary, NSError, NSNumber, NSObject, NSObjectProtocol, NSString,
-};
+use objc2_foundation::{NSArray, NSData, NSDictionary, NSError, NSNumber, NSObject, NSObjectProtocol, NSString};
 use std::convert::TryInto;
 use std::{
     collections::HashMap,
@@ -145,10 +141,7 @@ pub enum CentralDelegateEvent {
 impl Debug for CentralDelegateEvent {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            CentralDelegateEvent::DidUpdateState { state } => f
-                .debug_struct("CentralDelegateEvent")
-                .field("state", state)
-                .finish(),
+            CentralDelegateEvent::DidUpdateState { state } => f.debug_struct("CentralDelegateEvent").field("state", state).finish(),
             CentralDelegateEvent::DiscoveredPeripheral {
                 cbperipheral,
                 advertisement_name,
@@ -157,10 +150,7 @@ impl Debug for CentralDelegateEvent {
                 .field("cbperipheral", cbperipheral.deref())
                 .field("advertisement_name", advertisement_name)
                 .finish(),
-            CentralDelegateEvent::DiscoveredServices {
-                peripheral_uuid,
-                services,
-            } => f
+            CentralDelegateEvent::DiscoveredServices { peripheral_uuid, services } => f
                 .debug_struct("DiscoveredServices")
                 .field("peripheral_uuid", peripheral_uuid)
                 .field("services", &services.keys().collect::<Vec<_>>())
@@ -173,10 +163,7 @@ impl Debug for CentralDelegateEvent {
                 .debug_struct("DiscoveredCharacteristics")
                 .field("peripheral_uuid", peripheral_uuid)
                 .field("service_uuid", service_uuid)
-                .field(
-                    "characteristics",
-                    &characteristics.keys().collect::<Vec<_>>(),
-                )
+                .field("characteristics", &characteristics.keys().collect::<Vec<_>>())
                 .finish(),
             CentralDelegateEvent::DiscoveredCharacteristicDescriptors {
                 peripheral_uuid,
@@ -190,10 +177,9 @@ impl Debug for CentralDelegateEvent {
                 .field("characteristic_uuid", characteristic_uuid)
                 .field("descriptors", &descriptors.keys().collect::<Vec<_>>())
                 .finish(),
-            CentralDelegateEvent::ConnectedDevice { peripheral_uuid } => f
-                .debug_struct("ConnectedDevice")
-                .field("peripheral_uuid", peripheral_uuid)
-                .finish(),
+            CentralDelegateEvent::ConnectedDevice { peripheral_uuid } => {
+                f.debug_struct("ConnectedDevice").field("peripheral_uuid", peripheral_uuid).finish()
+            }
             CentralDelegateEvent::ConnectionFailed {
                 peripheral_uuid,
                 error_description,
@@ -318,10 +304,7 @@ impl Debug for CentralDelegateEvent {
                 .field("peripheral_uuid", peripheral_uuid)
                 .field("tx_power_level", tx_power_level)
                 .finish(),
-            CentralDelegateEvent::DidReadRssi {
-                peripheral_uuid,
-                rssi,
-            } => f
+            CentralDelegateEvent::DidReadRssi { peripheral_uuid, rssi } => f
                 .debug_struct("DidReadRssi")
                 .field("peripheral_uuid", peripheral_uuid)
                 .field("rssi", rssi)
@@ -334,36 +317,29 @@ impl Debug for CentralDelegateEvent {
     }
 }
 
-declare_class!(
-    #[derive(Debug)]
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements; CentralDelegate does not impl Drop.
+    #[unsafe(super(NSObject))]
+    #[name = "BtlePlugCentralManagerDelegate"]
+    #[ivars = Sender<CentralDelegateEvent>]
     pub struct CentralDelegate;
-
-    unsafe impl ClassType for CentralDelegate {
-        type Super = NSObject;
-        type Mutability = mutability::InteriorMutable;
-        const NAME: &'static str = "BtlePlugCentralManagerDelegate";
-    }
-
-    impl DeclaredClass for CentralDelegate {
-        type Ivars = Sender<CentralDelegateEvent>;
-    }
 
     unsafe impl NSObjectProtocol for CentralDelegate {}
 
     unsafe impl CBCentralManagerDelegate for CentralDelegate {
-        #[method(centralManagerDidUpdateState:)]
+        #[unsafe(method(centralManagerDidUpdateState:))]
         fn delegate_centralmanagerdidupdatestate(&self, central: &CBCentralManager) {
             trace!("delegate_centralmanagerdidupdatestate");
             let state = unsafe { central.state() };
             self.send_event(CentralDelegateEvent::DidUpdateState { state });
         }
 
-        // #[method(centralManager:willRestoreState:)]
+        // #[unsafe(method(centralManager:willRestoreState:))]
         // fn delegate_centralmanager_willrestorestate(&self, _central: &CBCentralManager, _dict: &NSDictionary<NSString, AnyObject>) {
         //     trace!("delegate_centralmanager_willrestorestate");
         // }
 
-        #[method(centralManager:didConnectPeripheral:)]
+        #[unsafe(method(centralManager:didConnectPeripheral:))]
         fn delegate_centralmanager_didconnectperipheral(
             &self,
             _central: &CBCentralManager,
@@ -379,7 +355,7 @@ declare_class!(
             self.send_event(CentralDelegateEvent::ConnectedDevice { peripheral_uuid });
         }
 
-        #[method(centralManager:didDisconnectPeripheral:error:)]
+        #[unsafe(method(centralManager:didDisconnectPeripheral:error:))]
         fn delegate_centralmanager_diddisconnectperipheral_error(
             &self,
             _central: &CBCentralManager,
@@ -396,7 +372,7 @@ declare_class!(
             self.send_event(CentralDelegateEvent::DisconnectedDevice { peripheral_uuid });
         }
 
-        #[method(centralManager:didFailToConnectPeripheral:error:)]
+        #[unsafe(method(centralManager:didFailToConnectPeripheral:error:))]
         fn delegate_centralmanager_didfailtoconnectperipheral_error(
             &self,
             _central: &CBCentralManager,
@@ -413,7 +389,7 @@ declare_class!(
             });
         }
 
-        #[method(centralManager:didDiscoverPeripheral:advertisementData:RSSI:)]
+        #[unsafe(method(centralManager:didDiscoverPeripheral:advertisementData:RSSI:))]
         fn delegate_centralmanager_diddiscoverperipheral_advertisementdata_rssi(
             &self,
             _central: &CBCentralManager,
@@ -426,10 +402,9 @@ declare_class!(
                 peripheral_debug(peripheral)
             );
 
-            let advertisement_name = adv_data
-                .get(unsafe { CBAdvertisementDataLocalNameKey })
-                .map(|name| name as *const AnyObject as *const NSString)
-                .and_then(|name| unsafe { nsstring_to_string(name) });
+            let advertisement_name = unsafe { adv_data.objectForKey(CBAdvertisementDataLocalNameKey) }
+                .and_then(|name| name.downcast::<NSString>().ok())
+                .map(|name| name.to_string());
 
             self.send_event(CentralDelegateEvent::DiscoveredPeripheral {
                 cbperipheral: peripheral.retain(),
@@ -441,16 +416,15 @@ declare_class!(
             let id = unsafe { peripheral.identifier() };
             let peripheral_uuid = nsuuid_to_uuid(&id);
 
-            let manufacturer_data = adv_data.get(unsafe { CBAdvertisementDataManufacturerDataKey });
+            let manufacturer_data = unsafe { adv_data.objectForKey(CBAdvertisementDataManufacturerDataKey) }
+                .and_then(|d| d.downcast::<NSData>().ok());
             if let Some(manufacturer_data) = manufacturer_data {
-                // SAFETY: manufacturer_data is `NSData`
-                let manufacturer_data: *const AnyObject = manufacturer_data;
-                let manufacturer_data: *const NSData = manufacturer_data.cast();
-                let manufacturer_data = unsafe { &*manufacturer_data };
+                // SAFETY: advertisement payload is not mutated while we read it.
+                let manufacturer_bytes = unsafe { manufacturer_data.as_bytes_unchecked() };
 
-                if manufacturer_data.len() >= 2 {
+                if manufacturer_bytes.len() >= 2 {
                     let (manufacturer_id, manufacturer_data) =
-                        manufacturer_data.bytes().split_at(2);
+                        manufacturer_bytes.split_at(2);
 
                     self.send_event(CentralDelegateEvent::ManufacturerData {
                         peripheral_uuid,
@@ -461,17 +435,15 @@ declare_class!(
                 }
             }
 
-            let service_data = adv_data.get(unsafe { CBAdvertisementDataServiceDataKey });
+            let service_data = unsafe { adv_data.objectForKey(CBAdvertisementDataServiceDataKey) }
+                .and_then(|d| d.downcast::<NSDictionary>().ok())
+                .map(|d| unsafe { Retained::cast_unchecked::<NSDictionary<CBUUID, NSData>>(d) });
             if let Some(service_data) = service_data {
-                // SAFETY: service_data is `NSDictionary<CBUUID, NSData>`
-                let service_data: *const AnyObject = service_data;
-                let service_data: *const NSDictionary<CBUUID, NSData> = service_data.cast();
-                let service_data = unsafe { &*service_data };
-
                 let mut result = HashMap::new();
                 for uuid in service_data.keys() {
-                    let data = &service_data[uuid];
-                    result.insert(cbuuid_to_uuid(uuid), data.bytes().to_vec());
+                    if let Some(data) = service_data.objectForKey(&uuid) {
+                        result.insert(cbuuid_to_uuid(&uuid), data.to_vec());
+                    }
                 }
 
                 self.send_event(CentralDelegateEvent::ServiceData {
@@ -481,16 +453,13 @@ declare_class!(
                 });
             }
 
-            let services = adv_data.get(unsafe { CBAdvertisementDataServiceUUIDsKey });
+            let services = unsafe { adv_data.objectForKey(CBAdvertisementDataServiceUUIDsKey) }
+                .and_then(|d| d.downcast::<NSArray>().ok())
+                .map(|d| unsafe { Retained::cast_unchecked::<NSArray<CBUUID>>(d) });
             if let Some(services) = services {
-                // SAFETY: services is `NSArray<CBUUID>`
-                let services: *const AnyObject = services;
-                let services: *const NSArray<CBUUID> = services.cast();
-                let services = unsafe { &*services };
-
                 let mut service_uuids = Vec::new();
                 for uuid in services {
-                    service_uuids.push(cbuuid_to_uuid(uuid));
+                    service_uuids.push(cbuuid_to_uuid(&uuid));
                 }
 
                 self.send_event(CentralDelegateEvent::Services {
@@ -500,13 +469,9 @@ declare_class!(
                 });
             }
 
-            let tx_power_level = adv_data
-                .get(unsafe { CBAdvertisementDataTxPowerLevelKey })
-                .map(|val| {
-                    let val: *const AnyObject = val;
-                    let val: *const NSNumber = val.cast();
-                    unsafe { &*val }.as_i16()
-                });
+            let tx_power_level = unsafe { adv_data.objectForKey(CBAdvertisementDataTxPowerLevelKey) }
+                .and_then(|val| val.downcast::<NSNumber>().ok())
+                .map(|val| val.as_i16());
 
             if let Some(tx_power_level) = tx_power_level {
                 self.send_event(CentralDelegateEvent::TxPowerLevel {
@@ -518,7 +483,7 @@ declare_class!(
     }
 
     unsafe impl CBPeripheralDelegate for CentralDelegate {
-        #[method(peripheral:didDiscoverServices:)]
+        #[unsafe(method(peripheral:didDiscoverServices:))]
         fn delegate_peripheral_diddiscoverservices(
             &self,
             peripheral: &CBPeripheral,
@@ -553,7 +518,7 @@ declare_class!(
             }
         }
 
-        #[method(peripheral:didDiscoverIncludedServicesForService:error:)]
+        #[unsafe(method(peripheral:didDiscoverIncludedServicesForService:error:))]
         fn delegate_peripheral_diddiscoverincludedservicesforservice_error(
             &self,
             peripheral: &CBPeripheral,
@@ -574,7 +539,7 @@ declare_class!(
             }
         }
 
-        #[method(peripheral:didDiscoverCharacteristicsForService:error:)]
+        #[unsafe(method(peripheral:didDiscoverCharacteristicsForService:error:))]
         fn delegate_peripheral_diddiscovercharacteristicsforservice_error(
             &self,
             peripheral: &CBPeripheral,
@@ -609,7 +574,7 @@ declare_class!(
             }
         }
 
-        #[method(peripheral:didDiscoverDescriptorsForCharacteristic:error:)]
+        #[unsafe(method(peripheral:didDiscoverDescriptorsForCharacteristic:error:))]
         fn delegate_peripheral_diddiscoverdescriptorsforcharacteristic_error(
             &self,
             peripheral: &CBPeripheral,
@@ -647,7 +612,7 @@ declare_class!(
             }
         }
 
-        #[method(peripheral:didUpdateValueForCharacteristic:error:)]
+        #[unsafe(method(peripheral:didUpdateValueForCharacteristic:error:))]
         fn delegate_peripheral_didupdatevalueforcharacteristic_error(
             &self,
             peripheral: &CBPeripheral,
@@ -678,7 +643,7 @@ declare_class!(
             }
         }
 
-        #[method(peripheral:didWriteValueForCharacteristic:error:)]
+        #[unsafe(method(peripheral:didWriteValueForCharacteristic:error:))]
         fn delegate_peripheral_didwritevalueforcharacteristic_error(
             &self,
             peripheral: &CBPeripheral,
@@ -707,7 +672,7 @@ declare_class!(
             }
         }
 
-        #[method(peripheral:didUpdateNotificationStateForCharacteristic:error:)]
+        #[unsafe(method(peripheral:didUpdateNotificationStateForCharacteristic:error:))]
         fn delegate_peripheral_didupdatenotificationstateforcharacteristic_error(
             &self,
             peripheral: &CBPeripheral,
@@ -738,7 +703,7 @@ declare_class!(
             }
         }
 
-        #[method(peripheral:didReadRSSI:error:)]
+        #[unsafe(method(peripheral:didReadRSSI:error:))]
         fn delegate_peripheral_didreadrssi_error(
             &self,
             peripheral: &CBPeripheral,
@@ -760,7 +725,7 @@ declare_class!(
             }
         }
 
-        #[method(peripheral:didUpdateValueForDescriptor:error:)]
+        #[unsafe(method(peripheral:didUpdateValueForDescriptor:error:))]
         fn delegate_peripheral_didupdatevaluefordescriptor_error(
             &self,
             peripheral: &CBPeripheral,
@@ -795,7 +760,7 @@ declare_class!(
             }
         }
 
-        #[method(peripheral:didWriteValueForDescriptor:error:)]
+        #[unsafe(method(peripheral:didWriteValueForDescriptor:error:))]
         fn delegate_peripheral_didwritevaluefordescriptor_error(
             &self,
             peripheral: &CBPeripheral,
@@ -828,7 +793,7 @@ declare_class!(
             }
         }
 
-        #[method(peripheral:didModifyServices:)]
+        #[unsafe(method(peripheral:didModifyServices:))]
         fn delegate_peripheral_didmodifyservices(
             &self,
             peripheral: &CBPeripheral,
@@ -850,7 +815,7 @@ declare_class!(
             });
         }
 
-        #[method(peripheralIsReadyToSendWriteWithoutResponse:)]
+        #[unsafe(method(peripheralIsReadyToSendWriteWithoutResponse:))]
         fn delegate_peripheral_is_ready_to_send_write_without_response(
             &self,
             peripheral: &CBPeripheral,
@@ -868,10 +833,16 @@ declare_class!(
     }
 );
 
+impl std::fmt::Debug for CentralDelegate {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_struct("CentralDelegate").finish_non_exhaustive()
+    }
+}
+
 impl CentralDelegate {
     pub fn new(sender: Sender<CentralDelegateEvent>) -> Retained<Self> {
-        let this = CentralDelegate::alloc().set_ivars(sender);
-        unsafe { msg_send_id![super(this), init] }
+        let this = Self::alloc().set_ivars(sender);
+        unsafe { msg_send![super(this), init] }
     }
 
     fn send_event(&self, event: CentralDelegateEvent) {
@@ -894,14 +865,14 @@ fn localized_description(error: Option<&NSError>) -> String {
 
 fn get_characteristic_value(characteristic: &CBCharacteristic) -> Vec<u8> {
     trace!("Getting data!");
-    let v = unsafe { characteristic.value() }.map(|value| value.bytes().into());
+    let v = unsafe { characteristic.value() }.map(|value| value.to_vec());
     trace!("BluetoothGATTCharacteristic::get_value -> {:?}", v);
     v.unwrap_or_default()
 }
 
 fn get_descriptor_value(descriptor: &CBDescriptor) -> Vec<u8> {
     trace!("Getting data!");
-    let v = unsafe { descriptor.value() }.map(|value| unsafe {
+    let v = unsafe { descriptor.value() }.map(|value| {
         let mut clazz = value.class();
         // Find the root class until we reach NSObject
         while let Some(superclass) = clazz.superclass() {
@@ -911,19 +882,13 @@ fn get_descriptor_value(descriptor: &CBDescriptor) -> Vec<u8> {
             clazz = superclass;
         }
 
-        match clazz.name() {
-            "NSString" => {
-                let d: Retained<NSString> = Retained::cast(value);
-                d.to_string().into_bytes()
-            }
-            "NSData" => {
-                let d: Retained<NSData> = Retained::cast(value);
-                d.bytes().into()
-            }
-            "NSNumber" => {
-                let d: Retained<NSNumber> = Retained::cast(value);
-                d.stringValue().to_string().into_bytes()
-            }
+        match clazz.name().to_bytes() {
+            b"NSString" => value.downcast::<NSString>().map(|d| d.to_string().into_bytes()).unwrap_or_default(),
+            b"NSData" => value.downcast::<NSData>().map(|d| d.to_vec()).unwrap_or_default(),
+            b"NSNumber" => value
+                .downcast::<NSNumber>()
+                .map(|d| d.stringValue().to_string().into_bytes())
+                .unwrap_or_default(),
             _ => {
                 error!("Unknown descriptor value class: {:?}", clazz);
                 Vec::new()

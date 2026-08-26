@@ -52,3 +52,8 @@ Rebased onto [deviceplug/btleplug](https://github.com/deviceplug/btleplug) `dev`
 Phone apps do **not** HW-filter by exact name `"YdS"` (hub firmware still does).
 
 Wired via `[patch.crates-io]` in Litten `crates/Cargo.toml`.
+
+12. **objc2 0.6** — Apple CoreBluetooth stack is `objc2` 0.6.4 +
+    `objc2-foundation` / `objc2-core-bluetooth` 0.3.2. `CentralDelegate` uses
+    `define_class!`; `CBCentralManager` is initialized with `dispatch2::DispatchQueue`.
+    `apple_util` types are 0.6 (`CBUUID` / `Retained`). Android / JNI is unchanged.

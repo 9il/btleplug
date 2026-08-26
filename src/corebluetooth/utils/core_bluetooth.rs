@@ -29,7 +29,8 @@ use crate::api::bleuuid::{uuid_from_u16, uuid_from_u32};
 /// are expanded with the Bluetooth Base UUID.
 pub fn cbuuid_to_uuid(cbuuid: &CBUUID) -> Uuid {
     let data = unsafe { cbuuid.data() };
-    let bytes = data.bytes();
+    // SAFETY: CBUUID data is immutable for the lifetime of the object.
+    let bytes = unsafe { data.as_bytes_unchecked() };
     match bytes.len() {
         2 => uuid_from_u16(u16::from_be_bytes(bytes.try_into().unwrap())),
         4 => uuid_from_u32(u32::from_be_bytes(bytes.try_into().unwrap())),
@@ -55,33 +56,23 @@ mod tests {
     fn parse_uuid_short() {
         let cbuuid = cbuuid_from_bytes(&[0x12, 0x34]);
         let uuid = cbuuid_to_uuid(&*cbuuid);
-        assert_eq!(
-            uuid,
-            Uuid::from_u128(0x00001234_0000_1000_8000_00805f9b34fb)
-        );
+        assert_eq!(uuid, Uuid::from_u128(0x00001234_0000_1000_8000_00805f9b34fb));
     }
 
     #[test]
     fn parse_uuid_32bit() {
         let cbuuid = cbuuid_from_bytes(&[0xab, 0xcd, 0x12, 0x34]);
         let uuid = cbuuid_to_uuid(&*cbuuid);
-        assert_eq!(
-            uuid,
-            Uuid::from_u128(0xabcd1234_0000_1000_8000_00805f9b34fb)
-        );
+        assert_eq!(uuid, Uuid::from_u128(0xabcd1234_0000_1000_8000_00805f9b34fb));
     }
 
     #[test]
     fn parse_uuid_long() {
         let cbuuid = cbuuid_from_bytes(&[
-            0x12, 0x34, 0x56, 0x78, 0x00, 0x00, 0x11, 0x11, 0x22, 0x22, 0x33, 0x33, 0x44, 0x44,
-            0x55, 0x55,
+            0x12, 0x34, 0x56, 0x78, 0x00, 0x00, 0x11, 0x11, 0x22, 0x22, 0x33, 0x33, 0x44, 0x44, 0x55, 0x55,
         ]);
         let uuid = cbuuid_to_uuid(&*cbuuid);
-        assert_eq!(
-            uuid,
-            Uuid::from_u128(0x12345678_0000_1111_2222_333344445555)
-        );
+        assert_eq!(uuid, Uuid::from_u128(0x12345678_0000_1111_2222_333344445555));
     }
 
     #[test]
