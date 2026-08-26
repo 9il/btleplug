@@ -30,10 +30,9 @@ Rebased onto [deviceplug/btleplug](https://github.com/deviceplug/btleplug) `dev`
 6. **Android: `PeripheralId: FromStr` + `From<BDAddr>`** — reconnect / add by MAC
    string without private constructors.
 
-7. **Android: `platform::init_from_raw`** — hosts on `jni` 0.21 (`jni-sys` 0.3) can
-   init droidplug (`jni` 0.22 / `jni-sys` 0.4) by passing `JNIEnv::get_raw()` as
-   `*mut c_void`. Do not take this crate's `jni::sys::JNIEnv` — the pointer types
-   do not unify across `jni-sys` major versions.
+7. **Android: `platform::init` / `init_from_raw`** — Litten shares `jni = "=0.22.4"`
+   with this crate (lockstep pin) and calls `init(&mut Env)`. `init_from_raw(*mut c_void)`
+   remains for hosts that cannot share the `Env` type.
 
 8. **`api::ATT_HEADER_BYTES`** — public ATT header size (3); used by effective MTU
    math (`payload + ATT_HEADER_BYTES`).
