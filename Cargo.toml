@@ -45,11 +45,12 @@ dbus = "0.9.10"
 bluez-async = "0.8.2"
 
 [target.'cfg(target_os = "android")'.dependencies]
-jni = "0.19.0"
+# Exact pin: keep in lockstep with Litten `crates/Cargo.toml` workspace.dependencies.jni.
+jni = "=0.22.4"
 once_cell = "1.21.3"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-jni = { version = "0.19.0", optional = true }
+jni = { version = "=0.22.4", optional = true }
 once_cell = { version = "1.21.3", optional = true }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]

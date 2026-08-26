@@ -1,87 +1,43 @@
 use ::jni::{
-    JNIEnv,
+    Env, bind_java_type,
     errors::Result,
-    objects::{JClass, JMethodID, JObject},
-    signature::JavaType,
+    jni_sig,
+    objects::{JObject, Reference},
 };
 use std::task::Waker;
 
-/// Wraps the given waker in a `io.github.gedgygedgy.rust.task.Waker` object.
-pub fn waker<'a: 'b, 'b>(env: &'b JNIEnv<'a>, waker: Waker) -> Result<JObject<'a>> {
+bind_java_type! {
+    pub JWaker => io.github.gedgygedgy.rust.task.Waker,
+}
+
+pub fn waker<'a>(env: &mut Env<'a>, waker: Waker) -> Result<JObject<'a>> {
     let runnable = super::ops::fn_once_runnable(env, |_e, _o| waker.wake())?;
 
+    let class = <JWaker as Reference>::lookup_class(env, &Default::default())?;
     let obj = env.new_object(
-        JClass::from(
-            super::classcache::get_class("io/github/gedgygedgy/rust/task/Waker")
-                .unwrap()
-                .as_obj(),
-        ),
-        "(Lio/github/gedgygedgy/rust/ops/FnRunnable;)V",
-        &[runnable.into()],
+        &*class,
+        jni_sig!("(Lio/github/gedgygedgy/rust/ops/FnRunnable;)V"),
+        &[(&runnable).into()],
     )?;
     Ok(obj)
 }
 
-/// Wrapper for [`JObject`]s that implement
-/// `io.github.gedgygedgy.rust.task.PollResult`.
-pub struct JPollResult<'a: 'b, 'b> {
-    internal: JObject<'a>,
-    get: JMethodID<'a>,
-    env: &'b JNIEnv<'a>,
-}
-
-impl<'a: 'b, 'b> JPollResult<'a, 'b> {
-    pub fn from_env(env: &'b JNIEnv<'a>, obj: JObject<'a>) -> Result<Self> {
-        let get = env.get_method_id(
-            JClass::from(
-                super::classcache::get_class("io/github/gedgygedgy/rust/task/PollResult")
-                    .unwrap()
-                    .as_obj(),
-            ),
-            "get",
-            "()Ljava/lang/Object;",
-        )?;
-        Ok(Self {
-            internal: obj,
-            get,
-            env,
-        })
-    }
-
-    pub fn get(&self) -> Result<JObject<'a>> {
-        self.env
-            .call_method_unchecked(
-                self.internal,
-                self.get,
-                JavaType::Object("java/lang/Object".into()),
-                &[],
-            )?
-            .l()
-    }
-}
-
-impl<'a: 'b, 'b> ::std::ops::Deref for JPollResult<'a, 'b> {
-    type Target = JObject<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.internal
-    }
-}
-
-impl<'a: 'b, 'b> From<JPollResult<'a, 'b>> for JObject<'a> {
-    fn from(other: JPollResult<'a, 'b>) -> JObject<'a> {
-        other.internal
-    }
+bind_java_type! {
+    pub JPollResult => io.github.gedgygedgy.rust.task.PollResult,
+    methods {
+        fn get() -> JObject,
+    },
 }
 
 #[cfg(test)]
 mod test {
     use super::super::test_utils;
+    use jni::{jni_sig, jni_str};
     use std::sync::Arc;
 
     #[test]
     fn test_waker_wake() {
-        test_utils::JVM_ENV.with(|env| {
+        test_utils::with_env(|env| {
             let data = Arc::new(test_utils::TestWakerData::new());
             assert_eq!(Arc::strong_count(&data), 1);
             assert_eq!(data.value(), false);
@@ -94,20 +50,24 @@ mod test {
             assert_eq!(Arc::strong_count(&data), 2);
             assert_eq!(data.value(), false);
 
-            env.call_method(jwaker, "wake", "()V", &[]).unwrap();
+            env.call_method(&jwaker, jni_str!("wake"), jni_sig!("()V"), &[])
+                .unwrap();
             assert_eq!(Arc::strong_count(&data), 1);
             assert_eq!(data.value(), true);
             data.set_value(false);
 
-            env.call_method(jwaker, "wake", "()V", &[]).unwrap();
+            env.call_method(&jwaker, jni_str!("wake"), jni_sig!("()V"), &[])
+                .unwrap();
             assert_eq!(Arc::strong_count(&data), 1);
             assert_eq!(data.value(), false);
-        });
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn test_waker_close_wake() {
-        test_utils::JVM_ENV.with(|env| {
+        test_utils::with_env(|env| {
             let data = Arc::new(test_utils::TestWakerData::new());
             assert_eq!(Arc::strong_count(&data), 1);
             assert_eq!(data.value(), false);
@@ -120,13 +80,17 @@ mod test {
             assert_eq!(Arc::strong_count(&data), 2);
             assert_eq!(data.value(), false);
 
-            env.call_method(jwaker, "close", "()V", &[]).unwrap();
+            env.call_method(&jwaker, jni_str!("close"), jni_sig!("()V"), &[])
+                .unwrap();
             assert_eq!(Arc::strong_count(&data), 1);
             assert_eq!(data.value(), false);
 
-            env.call_method(jwaker, "wake", "()V", &[]).unwrap();
+            env.call_method(&jwaker, jni_str!("wake"), jni_sig!("()V"), &[])
+                .unwrap();
             assert_eq!(Arc::strong_count(&data), 1);
             assert_eq!(data.value(), false);
-        });
+            Ok(())
+        })
+        .unwrap();
     }
 }

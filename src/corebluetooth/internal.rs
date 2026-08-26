@@ -158,6 +158,8 @@ pub enum CoreBluetoothReply {
     AdapterState(CBManagerState),
     ReadResult(Vec<u8>),
     ReadRssi(i16),
+    /// Effective ATT MTU (`maximumWriteValueLengthForType(.withoutResponse) + 3`).
+    Mtu(u16),
     Connected,
     ServicesDiscovered(BTreeSet<Service>),
     State(CBPeripheralState),
@@ -496,6 +498,11 @@ pub enum CoreBluetoothMessage {
         future: CoreBluetoothReplyStateShared,
     },
     ReadRssi {
+        peripheral_uuid: Uuid,
+        future: CoreBluetoothReplyStateShared,
+    },
+    /// Query CoreBluetooth effective ATT MTU (write-without-response length + 3).
+    GetEffectiveMtu {
         peripheral_uuid: Uuid,
         future: CoreBluetoothReplyStateShared,
     },
@@ -1205,6 +1212,34 @@ impl CoreBluetoothInternal {
         }
     }
 
+    /// Compose/Kable SoT: `maximumWriteValueLengthForType(WithoutResponse) + 3`.
+    fn get_effective_mtu(&mut self, peripheral_uuid: Uuid, fut: CoreBluetoothReplyStateShared) {
+        if let Some(peripheral) = self.peripherals.get(&peripheral_uuid) {
+            let write_len = unsafe {
+                peripheral.peripheral.maximumWriteValueLengthForType(
+                    CBCharacteristicWriteType::CBCharacteristicWriteWithoutResponse,
+                )
+            };
+            // ATT header is ATT_HEADER_BYTES; write_len is the max value payload.
+            let att_mtu = (write_len as u32)
+                .saturating_add(crate::api::ATT_HEADER_BYTES as u32)
+                .min(u16::MAX as u32) as u16;
+            trace!(
+                "Effective ATT MTU for {}: write_len={} → mtu={}",
+                peripheral_uuid,
+                write_len,
+                att_mtu
+            );
+            fut.lock()
+                .unwrap()
+                .set_reply(CoreBluetoothReply::Mtu(att_mtu));
+        } else {
+            fut.lock()
+                .unwrap()
+                .set_reply(CoreBluetoothReply::Err("Peripheral not found".to_string()));
+        }
+    }
+
     async fn on_read_rssi(&mut self, peripheral_uuid: Uuid, rssi: i16) {
         if let Some(peripheral) = self.peripherals.get_mut(&peripheral_uuid) {
             trace!("Got RSSI read event: {}", rssi);
@@ -1438,6 +1473,9 @@ impl CoreBluetoothInternal {
                     CoreBluetoothMessage::ReadRssi{peripheral_uuid, future} => {
                         self.read_rssi(peripheral_uuid, future)
                     }
+                    CoreBluetoothMessage::GetEffectiveMtu{peripheral_uuid, future} => {
+                        self.get_effective_mtu(peripheral_uuid, future);
+                    }
                 };
             }
         }
@@ -1451,7 +1489,11 @@ impl CoreBluetoothInternal {
     }
 
     fn start_discovery(&mut self, filter: ScanFilter) {
-        trace!("BluetoothAdapter::start_discovery");
+        trace!(
+            "BluetoothAdapter::start_discovery allow_duplicates={}",
+            filter.allow_duplicates
+        );
+        let allow_duplicates = filter.allow_duplicates;
         let service_uuids = scan_filter_to_service_uuids(filter);
         let mut options = NSMutableDictionary::new();
         // NOTE: If duplicates are not allowed then a peripheral will not show
@@ -1459,7 +1501,7 @@ impl CoreBluetoothInternal {
         options.insert_id(
             unsafe { CBCentralManagerScanOptionAllowDuplicatesKey },
             Retained::into_super(Retained::into_super(Retained::into_super(
-                NSNumber::new_bool(true),
+                NSNumber::new_bool(allow_duplicates),
             ))),
         );
         unsafe {

@@ -1,5 +1,4 @@
 pub mod arrays;
-pub mod classcache;
 pub mod exceptions;
 pub mod future;
 pub mod ops;
@@ -9,46 +8,56 @@ pub mod uuid;
 
 #[cfg(test)]
 pub(crate) mod test_utils {
-    use jni::{JNIEnv, JavaVM, objects::GlobalRef};
+    use jni::{
+        Env, JavaVM, NativeMethod, jni_sig, jni_str,
+        objects::{Global, JObject, Reference},
+    };
     use lazy_static::lazy_static;
     use std::{
+        cell::Cell,
+        ffi::c_void,
         sync::{Arc, Mutex},
         task::{Wake, Waker},
     };
 
-    use jni::NativeMethod;
+    fn test_init(env: &mut Env) -> jni::errors::Result<()> {
+        use super::{
+            future::{JFuture, JFutureException},
+            ops::{JFnAdapter, JFnBiFunctionImpl, JFnFunctionImpl, JFnRunnableImpl},
+            stream::{JStream, JStreamPoll},
+            task::{JPollResult, JWaker},
+        };
 
-    fn test_init(env: &JNIEnv) -> jni::errors::Result<()> {
-        use std::ffi::c_void;
-        super::classcache::find_add_class(env, "io/github/gedgygedgy/rust/future/Future")?;
-        super::classcache::find_add_class(env, "io/github/gedgygedgy/rust/future/FutureException")?;
-        super::classcache::find_add_class(env, "io/github/gedgygedgy/rust/ops/FnAdapter")?;
-        super::classcache::find_add_class(env, "io/github/gedgygedgy/rust/stream/Stream")?;
-        super::classcache::find_add_class(env, "io/github/gedgygedgy/rust/stream/StreamPoll")?;
-        super::classcache::find_add_class(env, "io/github/gedgygedgy/rust/task/Waker")?;
-        super::classcache::find_add_class(env, "io/github/gedgygedgy/rust/task/PollResult")?;
-        super::classcache::find_add_class(env, "io/github/gedgygedgy/rust/ops/FnRunnableImpl")?;
-        super::classcache::find_add_class(env, "io/github/gedgygedgy/rust/ops/FnBiFunctionImpl")?;
-        super::classcache::find_add_class(env, "io/github/gedgygedgy/rust/ops/FnFunctionImpl")?;
+        let loader = jni::objects::LoaderContext::default();
+        <JFuture as Reference>::lookup_class(env, &loader)?;
+        <JFutureException as Reference>::lookup_class(env, &loader)?;
+        <JFnAdapter as Reference>::lookup_class(env, &loader)?;
+        <JStream as Reference>::lookup_class(env, &loader)?;
+        <JStreamPoll as Reference>::lookup_class(env, &loader)?;
+        <JWaker as Reference>::lookup_class(env, &loader)?;
+        <JPollResult as Reference>::lookup_class(env, &loader)?;
+        <JFnRunnableImpl as Reference>::lookup_class(env, &loader)?;
+        <JFnBiFunctionImpl as Reference>::lookup_class(env, &loader)?;
+        <JFnFunctionImpl as Reference>::lookup_class(env, &loader)?;
 
-        let class = env.auto_local(env.find_class("io/github/gedgygedgy/rust/ops/FnAdapter")?);
-        env.register_native_methods(
-            &class,
+        let fn_adapter_class = <JFnAdapter as Reference>::lookup_class(env, &loader)?;
+        unsafe {
+            env.register_native_methods(
+            &*fn_adapter_class,
             &[
-                NativeMethod {
-                    name: "callInternal".into(),
-                    sig:
-                        "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"
-                            .into(),
-                    fn_ptr: super::ops::fn_adapter_call_internal as *mut c_void,
-                },
-                NativeMethod {
-                    name: "closeInternal".into(),
-                    sig: "()V".into(),
-                    fn_ptr: super::ops::fn_adapter_close_internal as *mut c_void,
-                },
+                NativeMethod::from_raw_parts(
+                    jni_str!("callInternal"),
+                    jni_str!("(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"),
+                    super::ops::fn_adapter_call_internal as *mut c_void,
+                ),
+                NativeMethod::from_raw_parts(
+                    jni_str!("closeInternal"),
+                    jni_str!("()V"),
+                    super::ops::fn_adapter_close_internal as *mut c_void,
+                ),
             ],
-        )?;
+        )?
+        };
         Ok(())
     }
 
@@ -85,32 +94,37 @@ pub(crate) mod test_utils {
 
     struct GlobalJVM {
         jvm: JavaVM,
-        class_loader: GlobalRef,
+        class_loader: Global<JObject<'static>>,
     }
 
     thread_local! {
-        pub static JVM_ENV: JNIEnv<'static> = {
-            let env = JVM.jvm.attach_current_thread_permanently().unwrap();
+        static CLASS_LOADER_SET: Cell<bool> = const { Cell::new(false) };
+    }
 
-            let thread = env
-                .call_static_method(
-                    "java/lang/Thread",
-                    "currentThread",
-                    "()Ljava/lang/Thread;",
-                    &[],
-                )
-                .unwrap()
-                .l()
-                .unwrap();
-            env.call_method(
-                thread,
-                "setContextClassLoader",
-                "(Ljava/lang/ClassLoader;)V",
-                &[JVM.class_loader.as_obj().into()]
-            ).unwrap();
-
-            env
-        }
+    pub fn with_env<F, T>(f: F) -> jni::errors::Result<T>
+    where
+        F: FnOnce(&mut Env) -> jni::errors::Result<T>,
+    {
+        JVM.jvm.attach_current_thread(|env| {
+            if !CLASS_LOADER_SET.with(|c| c.get()) {
+                let thread = env
+                    .call_static_method(
+                        jni_str!("java/lang/Thread"),
+                        jni_str!("currentThread"),
+                        jni_sig!("()Ljava/lang/Thread;"),
+                        &[],
+                    )?
+                    .l()?;
+                env.call_method(
+                    &thread,
+                    jni_str!("setContextClassLoader"),
+                    jni_sig!("(Ljava/lang/ClassLoader;)V"),
+                    &[JVM.class_loader.as_obj().into()],
+                )?;
+                CLASS_LOADER_SET.with(|c| c.set(true));
+            }
+            f(env)
+        })
     }
 
     lazy_static! {
@@ -125,39 +139,37 @@ pub(crate) mod test_utils {
             jni_utils_jar.push("libs");
             jni_utils_jar.push("btleplug-jni.jar");
 
-            let jvm_args = InitArgsBuilder::new()
-                .option(&format!(
-                    "-Djava.class.path={}",
-                    jni_utils_jar.to_str().unwrap()
-                ))
-                .build()
-                .unwrap();
+            let classpath = format!("-Djava.class.path={}", jni_utils_jar.to_str().unwrap());
+            let jvm_args = InitArgsBuilder::new().option(&classpath).build().unwrap();
             let jvm = JavaVM::new(jvm_args).unwrap();
 
-            let env = jvm.attach_current_thread_permanently().unwrap();
-            test_init(&env).unwrap();
+            let class_loader = jvm
+                .attach_current_thread(|env| {
+                    test_init(env).unwrap();
 
-            let thread = env
-                .call_static_method(
-                    "java/lang/Thread",
-                    "currentThread",
-                    "()Ljava/lang/Thread;",
-                    &[],
-                )
-                .unwrap()
-                .l()
+                    let thread = env
+                        .call_static_method(
+                            jni_str!("java/lang/Thread"),
+                            jni_str!("currentThread"),
+                            jni_sig!("()Ljava/lang/Thread;"),
+                            &[],
+                        )
+                        .unwrap()
+                        .l()
+                        .unwrap();
+                    let class_loader = env
+                        .call_method(
+                            &thread,
+                            jni_str!("getContextClassLoader"),
+                            jni_sig!("()Ljava/lang/ClassLoader;"),
+                            &[],
+                        )
+                        .unwrap()
+                        .l()
+                        .unwrap();
+                    Ok::<_, jni::errors::Error>(env.new_global_ref(class_loader).unwrap())
+                })
                 .unwrap();
-            let class_loader = env
-                .call_method(
-                    thread,
-                    "getContextClassLoader",
-                    "()Ljava/lang/ClassLoader;",
-                    &[],
-                )
-                .unwrap()
-                .l()
-                .unwrap();
-            let class_loader = env.new_global_ref(class_loader).unwrap();
 
             GlobalJVM { jvm, class_loader }
         };

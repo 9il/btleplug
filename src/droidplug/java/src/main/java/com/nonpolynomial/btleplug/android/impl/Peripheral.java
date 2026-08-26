@@ -77,7 +77,14 @@ class Peripheral {
                     } else if (this.gatt == null) {
                         try {
                             this.setCommandCallback(callback);
-                            this.gatt = this.device.connectGatt(null, false, this.callback);
+                            // TRANSPORT_LE: dual-mode peers must not fall through to BR/EDR.
+                            if (android.os.Build.VERSION.SDK_INT >= 23) {
+                                this.gatt = this.device.connectGatt(
+                                        null, false, this.callback,
+                                        android.bluetooth.BluetoothDevice.TRANSPORT_LE);
+                            } else {
+                                this.gatt = this.device.connectGatt(null, false, this.callback);
+                            }
                         } catch (SecurityException ex) {
                             throw new PermissionDeniedException(ex);
                         }

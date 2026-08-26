@@ -47,6 +47,9 @@ use crate::platform::PeripheralId;
 /// The default MTU size for a peripheral.
 pub const DEFAULT_MTU_SIZE: u16 = 23;
 
+/// ATT header bytes (opcode + handle). Effective ATT MTU = max payload + this.
+pub const ATT_HEADER_BYTES: u16 = 3;
+
 #[cfg_attr(
     feature = "serde",
     derive(Serialize, Deserialize),
@@ -209,12 +212,52 @@ pub struct PeripheralProperties {
     derive(Serialize, Deserialize),
     serde(crate = "serde_cr")
 )]
+/// Android `ScanSettings.SCAN_MODE_*` (and Litten scan-duty mapping).
+///
+/// Ignored on non-Android backends (CoreBluetooth uses [`ScanFilter::allow_duplicates`] instead).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(Serialize, Deserialize),
+    serde(crate = "serde_cr")
+)]
+pub enum ScanMode {
+    /// `SCAN_MODE_BALANCED`
+    #[default]
+    Balanced,
+    /// `SCAN_MODE_LOW_LATENCY`
+    LowLatency,
+    /// `SCAN_MODE_LOW_POWER`
+    LowPower,
+    /// `SCAN_MODE_OPPORTUNISTIC`
+    Opportunistic,
+}
+
 /// The filter used when scanning for BLE devices.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScanFilter {
     /// If the filter contains at least one service UUID, only devices supporting at least one of
     /// the given services will be available.
     pub services: Vec<Uuid>,
+    /// CoreBluetooth: `CBCentralManagerScanOptionAllowDuplicatesKey`.
+    ///
+    /// Default `true` preserves historical btleplug CB behaviour. Set `false` for
+    /// LowPower / Opportunistic scan modes (Compose/Kable SoT). Ignored on non-Apple
+    /// backends.
+    pub allow_duplicates: bool,
+    /// Android scan duty cycle. Default [`ScanMode::Balanced`]. Ignored elsewhere.
+    pub scan_mode: ScanMode,
+}
+
+impl Default for ScanFilter {
+    fn default() -> Self {
+        Self {
+            services: Vec::new(),
+            // Match pre-fork CoreBluetooth start_discovery (always-on duplicates).
+            allow_duplicates: true,
+            scan_mode: ScanMode::Balanced,
+        }
+    }
 }
 
 /// Current BLE connection parameters as reported by the OS.
@@ -262,6 +305,15 @@ pub trait Peripheral: Send + Sync + Clone + Debug {
 
     /// Returns the currently negotiated mtu size
     fn mtu(&self) -> u16;
+
+    /// Request an ATT MTU exchange (Android). On Android 14+ the stack may ask for 517
+    /// regardless of `mtu`; negotiated value is still reported via [`Peripheral::mtu`].
+    ///
+    /// Default: [`Error::NotSupported`]. CoreBluetooth has no MTU request — use platform
+    /// helpers (e.g. Litten `refresh_effective_mtu`) instead.
+    async fn request_mtu(&self, _mtu: u16) -> Result<u16> {
+        Err(crate::Error::NotSupported("request_mtu".to_string()))
+    }
 
     /// Returns the set of properties associated with the peripheral. These may be updated over time
     /// as additional advertising reports are received.

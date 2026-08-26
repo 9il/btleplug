@@ -41,7 +41,8 @@ pub fn find_descriptor(
 }
 
 use jni::objects::JClass;
-use jni::JNIEnv;
+use jni::{Env, EnvUnowned, jni_str};
+use jni::errors::ThrowRuntimeExAndDefault;
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
@@ -58,7 +59,7 @@ fn runtime() -> &'static Runtime {
 const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(55);
 
 /// Run a test function on the global runtime, converting panics to JNI exceptions.
-fn run_test(env: &JNIEnv, test_name: &str, f: impl std::future::Future<Output = ()>) {
+fn run_test(env: &mut Env, test_name: &str, f: impl std::future::Future<Output = ()>) {
     log::info!("[START] {}", test_name);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         runtime().block_on(async {
@@ -78,7 +79,8 @@ fn run_test(env: &JNIEnv, test_name: &str, f: impl std::future::Future<Output = 
                 "test panicked".to_string()
             };
             log::error!("[FAIL] {}: {}", test_name, msg);
-            env.throw_new("java/lang/RuntimeException", &msg).ok();
+            let jni_msg = jni::strings::JNIString::from(msg.as_str());
+            env.throw_new(jni_str!("java/lang/RuntimeException"), &jni_msg).ok();
         }
     }
 }
@@ -86,7 +88,7 @@ fn run_test(env: &JNIEnv, test_name: &str, f: impl std::future::Future<Output = 
 /// Initialize btleplug's Android/JNI layer. Must be called once before any tests.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_nonpolynomial_btleplug_test_NativeTests_initBtleplug(
-    env: JNIEnv,
+    mut env: EnvUnowned,
     _class: JClass,
 ) {
     android_logger::init_once(
@@ -94,7 +96,8 @@ pub extern "system" fn Java_com_nonpolynomial_btleplug_test_NativeTests_initBtle
             .with_max_level(log::LevelFilter::Debug)
             .with_tag("btleplug-test"),
     );
-    btleplug::platform::init(&env).expect("failed to initialize btleplug");
+    env.with_env(|env| btleplug::platform::init(env))
+        .resolve::<ThrowRuntimeExAndDefault>();
 }
 
 // ── Test JNI exports ────────────────────────────────────────────────
@@ -105,8 +108,12 @@ pub extern "system" fn Java_com_nonpolynomial_btleplug_test_NativeTests_initBtle
 macro_rules! jni_test {
     ($jni_name:ident, $test_fn:path) => {
         #[unsafe(no_mangle)]
-        pub extern "system" fn $jni_name(env: JNIEnv, _class: JClass) {
-            run_test(&env, stringify!($test_fn), $test_fn());
+        pub extern "system" fn $jni_name(mut env: EnvUnowned, _class: JClass) {
+            env.with_env(|env| {
+                run_test(env, stringify!($test_fn), $test_fn());
+                Ok::<_, jni::errors::Error>(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>();
         }
     };
 }

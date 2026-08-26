@@ -1,7 +1,6 @@
-use super::jni_utils::exceptions::try_block;
 use super::{
     jni::{
-        global_jvm,
+        jvm,
         objects::{JScanFilter, JScanResult},
     },
     peripheral::{Peripheral, PeripheralId},
@@ -13,11 +12,9 @@ use crate::{
 };
 use async_trait::async_trait;
 use futures::stream::Stream;
-use jni::objects::JClass;
 use jni::{
-    JNIEnv,
-    objects::{GlobalRef, JObject, JString},
-    strings::JavaStr,
+    Env, jni_sig, jni_str,
+    objects::{Global, JObject, JString},
     sys::jboolean,
 };
 use std::{
@@ -30,7 +27,7 @@ use std::{
 #[derive(Clone)]
 pub struct Adapter {
     manager: Arc<AdapterManager<Peripheral>>,
-    internal: GlobalRef,
+    internal: Arc<Global<JObject<'static>>>,
 }
 
 impl Debug for Adapter {
@@ -43,30 +40,31 @@ impl Debug for Adapter {
 
 impl Adapter {
     pub(crate) fn new() -> Result<Self> {
-        let env = global_jvm().get_env()?;
+        jvm()?.attach_current_thread(|env| {
+            let obj = env.new_object(
+                jni_str!("com/nonpolynomial/btleplug/android/impl/Adapter"),
+                jni_sig!("()V"),
+                &[],
+            )?;
+            let internal = Arc::new(env.new_global_ref(&obj)?);
+            let adapter = Self {
+                manager: Arc::new(AdapterManager::default()),
+                internal,
+            };
+            unsafe { env.set_rust_field(&obj, jni_str!("handle"), adapter.clone()) }?;
 
-        let obj = env.new_object(
-            "com/nonpolynomial/btleplug/android/impl/Adapter",
-            "()V",
-            &[],
-        )?;
-        let internal = env.new_global_ref(obj)?;
-        let adapter = Self {
-            manager: Arc::new(AdapterManager::default()),
-            internal,
-        };
-        env.set_rust_field(obj, "handle", adapter.clone())?;
-
-        Ok(adapter)
+            Ok(adapter)
+        })
     }
 
-    pub fn report_scan_result(&self, scan_result: JObject) -> Result<Peripheral> {
-        use std::convert::TryInto;
-
-        let env = global_jvm().get_env()?;
-        let scan_result = JScanResult::from_env(&env, scan_result)?;
-
-        let (addr, properties): (BDAddr, Option<PeripheralProperties>) = scan_result.try_into()?;
+    pub fn report_scan_result<'a>(
+        &self,
+        env: &mut Env<'a>,
+        scan_result: JObject<'a>,
+    ) -> Result<Peripheral> {
+        let scan_result = env.cast_local::<JScanResult>(scan_result)?;
+        let (addr, properties): (BDAddr, Option<PeripheralProperties>) =
+            scan_result.to_peripheral_properties(env)?;
 
         match self.manager.peripheral(&PeripheralId(addr)) {
             Some(p) => match properties {
@@ -74,10 +72,7 @@ impl Adapter {
                     self.report_properties(&p, properties, false);
                     Ok(p)
                 }
-                None => {
-                    //self.manager.emit(CentralEvent::DeviceDisconnected(addr));
-                    Err(Error::DeviceNotFound)
-                }
+                None => Err(Error::DeviceNotFound),
             },
             None => match properties {
                 Some(properties) => {
@@ -91,10 +86,12 @@ impl Adapter {
     }
 
     fn add(&self, address: BDAddr) -> Result<Peripheral> {
-        let env = global_jvm().get_env()?;
-        let peripheral = Peripheral::new(&env, self.internal.as_obj(), address)?;
-        self.manager.add_peripheral(peripheral.clone());
-        Ok(peripheral)
+        jvm()?.attach_current_thread(|env| {
+            let local_adapter = env.new_local_ref(self.internal.as_obj())?;
+            let peripheral = Peripheral::new(env, local_adapter, address)?;
+            self.manager.add_peripheral(peripheral.clone());
+            Ok(peripheral)
+        })
     }
 
     fn report_properties(
@@ -130,7 +127,6 @@ impl Central for Adapter {
     type Peripheral = Peripheral;
 
     async fn adapter_info(&self) -> Result<String> {
-        // TODO: Get information about the adapter.
         Ok("Android".to_string())
     }
 
@@ -139,41 +135,54 @@ impl Central for Adapter {
     }
 
     async fn start_scan(&self, filter: ScanFilter) -> Result<()> {
-        let env = global_jvm().get_env()?;
-        let filter = JScanFilter::new(&env, filter)?;
-        try_block(&env, || {
-            env.call_method(
-                &self.internal,
-                "startScan",
-                "(Lcom/nonpolynomial/btleplug/android/impl/ScanFilter;)V",
-                &[filter.into()],
-            )?;
-            Ok(Ok(()))
+        jvm()?.attach_current_thread(|env| {
+        let filter = JScanFilter::new(env, filter)?;
+        let filter_obj: JObject = filter.into();
+        match env.call_method(
+            self.internal.as_obj(),
+            jni_str!("startScan"),
+            jni_sig!("(Lcom/nonpolynomial/btleplug/android/impl/ScanFilter;)V"),
+            &[(&filter_obj).into()],
+        ) {
+            Ok(_) => Ok(()),
+            Err(jni::errors::Error::JavaException) => {
+                let ex = env.exception_occurred().unwrap();
+                env.exception_clear();
+
+                let no_adapter_class = <super::jni::objects::JNoBluetoothAdapterException as jni::objects::Reference>::lookup_class(
+                    env,
+                    &Default::default(),
+                )?;
+
+                if env.is_instance_of(&ex, &*no_adapter_class)? {
+                    Err(Error::NoAdapterAvailable)
+                } else if env.is_instance_of(&ex, jni_str!("java/lang/RuntimeException"))? {
+                    let msg = env
+                        .call_method(&ex, jni_str!("getMessage"), jni_sig!("()Ljava/lang/String;"), &[])?
+                        .l()?;
+                    let jstr = env.cast_local::<JString>(msg)?;
+                    let msgstr = String::from(jstr.mutf8_chars(env)?);
+                    Err(Error::RuntimeError(msgstr))
+                } else {
+                    let _ = env.throw(&ex);
+                    Err(jni::errors::Error::JavaException.into())
+                }
+            }
+            Err(e) => Err(e.into()),
+        }
         })
-        .catch(
-            JClass::from(
-                super::jni_utils::classcache::get_class(
-                    "com/nonpolynomial/btleplug/android/impl/NoBluetoothAdapterException",
-                )
-                .unwrap()
-                .as_obj(),
-            ),
-            |_ex| Ok(Err(Error::NoAdapterAvailable)),
-        )
-        .catch("java/lang/RuntimeException", |ex| {
-            let msg = env
-                .call_method(ex, "getMessage", "()Ljava/lang/String;", &[])?
-                .l()?;
-            let msgstr: String = env.get_string(msg.into())?.into();
-            Ok(Err(Error::RuntimeError(msgstr)))
-        })
-        .result()?
     }
 
     async fn stop_scan(&self) -> Result<()> {
-        let env = global_jvm().get_env()?;
-        env.call_method(&self.internal, "stopScan", "()V", &[])?;
-        Ok(())
+        jvm()?.attach_current_thread(|env| {
+            env.call_method(
+                self.internal.as_obj(),
+                jni_str!("stopScan"),
+                jni_sig!("()V"),
+                &[],
+            )?;
+            Ok(())
+        })
     }
 
     async fn peripherals(&self) -> Result<Vec<Peripheral>> {
@@ -200,27 +209,28 @@ impl Central for Adapter {
     }
 }
 
-pub(crate) fn adapter_report_scan_result_internal(
-    env: &JNIEnv,
-    obj: JObject,
-    scan_result: JObject,
+pub(crate) fn adapter_report_scan_result_internal<'a>(
+    env: &mut Env<'a>,
+    obj: &JObject,
+    scan_result: JObject<'a>,
 ) -> crate::Result<()> {
-    let adapter = env.get_rust_field::<_, _, Adapter>(obj, "handle")?;
-    adapter.report_scan_result(scan_result)?;
+    let adapter = unsafe { env.get_rust_field::<_, _, Adapter>(obj, jni_str!("handle")) }?;
+    let adapter_clone = adapter.clone();
+    drop(adapter);
+    adapter_clone.report_scan_result(env, scan_result)?;
     Ok(())
 }
 
 pub(crate) fn adapter_on_connection_state_changed_internal(
-    env: &JNIEnv,
-    obj: JObject,
+    env: &mut Env,
+    obj: &JObject,
     addr: JString,
     connected: jboolean,
 ) -> crate::Result<()> {
-    let adapter = env.get_rust_field::<_, _, Adapter>(obj, "handle")?;
-    let addr_str = JavaStr::from_env(env, addr)?;
-    let addr_str = addr_str.to_str().map_err(|e| Error::Other(e.into()))?;
-    let addr = BDAddr::from_str(addr_str)?;
-    adapter.manager.emit(if connected != 0 {
+    let addr_str = String::from(addr.mutf8_chars(env)?);
+    let addr = BDAddr::from_str(&addr_str)?;
+    let adapter = unsafe { env.get_rust_field::<_, _, Adapter>(obj, jni_str!("handle")) }?;
+    adapter.manager.emit(if connected {
         CentralEvent::DeviceConnected(PeripheralId(addr))
     } else {
         CentralEvent::DeviceDisconnected(PeripheralId(addr))

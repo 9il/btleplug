@@ -28,7 +28,13 @@ public class QueueStream<T> implements Stream<T> {
         Waker oldWaker = null;
         synchronized (this.lock) {
             if (!this.result.isEmpty()) {
-                result = () -> () -> this.result.remove();
+                // Dequeue under the lock. Returning `() -> this.result.remove()`
+                // raced: a second pollNext could also see non-empty, then both
+                // PollResult.get() calls remove — the second throws
+                // NoSuchElementException. With CheckJNI that pending exception
+                // aborts on the next GetMethodID (BLE Thread-5).
+                final T item = this.result.remove();
+                result = () -> () -> item;
             } else if (this.finished) {
                 result = () -> null;
             } else {
@@ -64,11 +70,7 @@ public class QueueStream<T> implements Stream<T> {
      * @param item Item to add to the queue.
      */
     public void add(T item) {
-        this.doEvent(() -> {
-            synchronized (this.lock) {
-                this.result.add(item);
-            }
-        });
+        this.doEvent(() -> this.result.add(item));
     }
 
     /**

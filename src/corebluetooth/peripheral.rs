@@ -206,6 +206,32 @@ impl Peripheral {
             props.advertisement_name = advertisement_name;
         }
     }
+
+    /// Refresh and return the CoreBluetooth effective ATT MTU (Litten soft-fork).
+    ///
+    /// SoT: Kable `maximumWriteValueLengthForType(WithoutResponse) + 3`.
+    /// Updates the value returned by [`api::Peripheral::mtu`].
+    pub async fn refresh_effective_mtu(&self) -> Result<u16> {
+        let fut = CoreBluetoothReplyFuture::default();
+        self.shared
+            .message_sender
+            .to_owned()
+            .send(CoreBluetoothMessage::GetEffectiveMtu {
+                peripheral_uuid: self.shared.uuid,
+                future: fut.get_state_clone(),
+            })
+            .await?;
+        match fut.await {
+            CoreBluetoothReply::Mtu(mtu) => {
+                self.shared
+                    .mtu
+                    .store(mtu, std::sync::atomic::Ordering::Relaxed);
+                Ok(mtu)
+            }
+            CoreBluetoothReply::Err(msg) => Err(Error::RuntimeError(msg)),
+            _ => panic!("Shouldn't get anything but Mtu or Err!"),
+        }
+    }
 }
 
 impl Display for Peripheral {
